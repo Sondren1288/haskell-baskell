@@ -20,6 +20,7 @@ module Main (main) where
 import Calamity
 import Calamity.Cache.InMemory
 import qualified Calamity.Types.Model.Channel.Message as Cont
+import qualified Calamity.Types.Tellable (ToMessage)
 import Calamity.Commands
 import Calamity.Commands.Context (useFullContext, ctxMessage, FullContext, CalamityCommandContext (ctxChannelID, ctxUserID))
 import qualified Calamity.HTTP.Channel as HTTPC
@@ -39,15 +40,16 @@ import qualified Polysemy.Internal.Union as PU
 import System.Environment (getEnv)
 import TextShow
 import Data.Char (isDigit)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import GHC.Data.ShortText (ShortText(contents))
 import qualified Calamity as HTTPC
 import Web.Authenticate.OAuth (def)
 import Data.Monoid (Endo)
 import Data.Function
 import qualified Data.Text.Lazy as DT
-import Calamity.Cache.Eff (updateMessage)
-import Control.Monad.State (evalState)
+import Calamity.Cache.Eff (updateMessage, getMessage)
+import Control.Monad.State (evalState, MonadIO (liftIO))
+import Control.Concurrent.Thread.Delay (delay)
 -- import Control.Lens
 
 data CustomViewState = CustomViewState
@@ -172,6 +174,12 @@ eitherToMessage :: Either RestError Message -> Maybe Message
 eitherToMessage (Left x) = Nothing
 eitherToMessage (Right msg) = Just msg
     
+getReactions :: (BotC r) => Message -> P.Sem r [Reaction]
+getReactions msg = do
+  msg' <- getMessage (view #id msg)
+  case msg' of 
+    Just m -> pure (view #reactions m)
+    Nothing -> pure []
 
 
 main :: IO ()
@@ -269,6 +277,24 @@ main = do
 
           command @'[T.Text] "poll2" \ctx poll -> do
             void $ DiP.info poll
+
+          command @'[T.Text] "experiment" \ctx arg -> do
+            sentMessage <- tell @T.Text ctx "test"
+            case sentMessage of 
+              Right s -> do
+                          let tempSnowflake = Snowflake 1097858537608196138 :: Snowflake Message 
+                          let msgSnowflake = view #id s
+                          let channelSnowflake = view #channelID s :: Snowflake Channel
+                          -- reactions <- getMessage channelSnowflake msgSnowflake
+                          -- let reactions = view #reactions s
+                          liftIO $ delay (10 * 1_000_000)
+                          reactions <- getReactions s :: (BotC r) => P.Sem r [Reaction]
+                          --reactions <- getMessage (fromMaybe tempSnowflake $ Cont.messageID s)
+                          void $ tell @T.Text ctx $ T.pack $ "Reactions " <> show (length reactions) <> " "
+                
+            --when Right sentMessage do
+            --  reactions <- getMessage (#messageID ^. Right sentMessage) --(fromJust $ messageGuildID sentMessage)
+            --  void $ tell @T.Text ctx $ T.pack $ show reactions
 
           react @'TypingStartEvt \(channelFlake, userFlake, _) -> do
             void . tell @T.Text channelFlake $ T.pack . ("Are you gonna finish that "++) . (++" ?") $ T.unpack . mention $ userFlake
