@@ -66,6 +66,21 @@ data PollViewState = PollViewState
 $(makeFieldLabelsNoPrefix ''CustomViewState)
 $(makeFieldLabelsNoPrefix ''PollViewState)
 
+-- Constants
+defaultRawEmoji :: [RawEmoji]
+-- defaultRawEmoji = [(UnicodeEmoji . T.pack) (":" ++ show x ++ ":") | x <- [0..9]]
+defaultRawEmoji = map (UnicodeEmoji . T.pack) 
+    [ ":zero:"
+    , ":one:"
+    , ":two:"
+    , ":three:"
+    , ":four:"
+    , ":five:"
+    , ":six:"
+    , ":seven:"
+    , ":eight:"
+    , ":nine:"] 
+
 perm :: Maybe Int -> [(Int, Int)]
 perm Nothing = [(-1,-1)]
 perm (Just x) = [(g, h) | g <- [1..x], h <- [1..x]]
@@ -181,6 +196,11 @@ getReactions msg = do
     Just m -> pure (view #reactions m)
     Nothing -> pure []
 
+combineTextEmoji :: [T.Text] -> [RawEmoji] -> T.Text
+combineTextEmoji _ [] = ""
+combineTextEmoji [] _ = ""
+combineTextEmoji (t:text) (e:emojis) = t <> T.pack " " <> showt e <> T.pack "\n" <> combineTextEmoji text emojis
+
 
 main :: IO ()
 main = do
@@ -218,6 +238,7 @@ main = do
 
             void $ DiP.info $ T.pack "apple"
             void $ DiP.info poll
+            void $ DiP.info $ T.pack "Now showing categories:"
             void $ DiP.info $ T.pack $ show categories
             void $ DiP.info $ Cont.content $ ctxMessage ctx 
             -- This works to get all the categories
@@ -253,7 +274,7 @@ main = do
             -- a <- P.get
             -- tester <- P.gets (^. #context)
             -- Cont.Message
-            pure ()
+            -- pure ()
 
           command @'[] "tast" \ctx-> do 
             let emptyOption = SelectOption "" "" Nothing Nothing False
@@ -278,16 +299,26 @@ main = do
           command @'[T.Text] "poll2" \ctx poll -> do
             void $ DiP.info poll
 
-          command @'[T.Text] "experiment" \ctx arg -> do
-            sentMessage <- tell @T.Text ctx "test"
+          command @'[Integer, T.Text] "experiment" \ctx sleep arg -> do
+            let content = T.unpack $ view #content $ ctxMessage ctx
+            let categories = map T.pack $ drop 2 $ splitAtAll " " content
+            let emojies = take (length categories) defaultRawEmoji
+            -- Construct message
+            -- let messageToSend = intoMsg "Poll" <> intoMsg Embed (def & #description ?~ "Embed description")
+            let embedded = (def :: Embed) & #title ?~ "Poll" & #description ?~ combineTextEmoji categories emojies
+
+
+            sentMessage <- tell ctx $ intoMsg embedded <> intoMsg @T.Text "Normal text"
+            -- sentMessage <- tell @T.Text ctx $ T.pack $ show categories ++ "\nEnds after " ++ show sleep ++ " seconds"
             case sentMessage of 
               Right s -> do
+                          void $ updateMessage (view #id s) (\x -> x {reactions = map (Reaction 1 True) emojies})
                           let tempSnowflake = Snowflake 1097858537608196138 :: Snowflake Message 
                           let msgSnowflake = view #id s
                           let channelSnowflake = view #channelID s :: Snowflake Channel
                           -- reactions <- getMessage channelSnowflake msgSnowflake
                           -- let reactions = view #reactions s
-                          liftIO $ delay (10 * 1_000_000)
+                          liftIO $ delay (sleep * 1_000_000)
                           reactions <- getReactions s :: (BotC r) => P.Sem r [Reaction]
                           --reactions <- getMessage (fromMaybe tempSnowflake $ Cont.messageID s)
                           void $ tell @T.Text ctx $ T.pack $ "Reactions " <> show (length reactions) <> " "
