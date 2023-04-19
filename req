@@ -13,4 +13,5 @@
      , polysemy-plugin >= 0.3 && <0.5
      , stm >= 2.5 && <3
      , text-show >= 3.8 && <4
+     , unbounded-delays >= 0.1
 -}
