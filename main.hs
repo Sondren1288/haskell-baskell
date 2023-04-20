@@ -302,23 +302,31 @@ main = do
           command @'[Integer, T.Text] "experiment" \ctx sleep arg -> do
             let content = T.unpack $ view #content $ ctxMessage ctx
             let categories = map T.pack $ drop 2 $ splitAtAll " " content
+            -- Guild type has the following field that can be used later:
+            -- emojis :: SnowflakeMap Emoji
             let emojies = take (length categories) defaultRawEmoji
             -- Construct message
             -- let messageToSend = intoMsg "Poll" <> intoMsg Embed (def & #description ?~ "Embed description")
             let embedded = (def :: Embed) & #title ?~ "Poll" & #description ?~ combineTextEmoji categories emojies
 
 
-            sentMessage <- tell ctx $ intoMsg embedded <> intoMsg @T.Text "Normal text"
+            sentMessage <- tell ctx $ intoMsg embedded <> intoMsg @T.Text "Polled"
             -- sentMessage <- tell @T.Text ctx $ T.pack $ show categories ++ "\nEnds after " ++ show sleep ++ " seconds"
             case sentMessage of 
               Right s -> do
-                          void $ updateMessage (view #id s) (\x -> x {reactions = map (Reaction 1 True) emojies})
+                          -- void $ I.edit (void s) $ updateMessage (view #id s) (\x -> x {reactions = map (Reaction 1 True) emojies})
+                          void . DiP.info . T.pack $ "Trying to rect to messageID " ++ show (view #id s) ++ " in channelID " ++ show (view #channelID s)
+                          let requests = map (HTTPC.CreateReaction s s) emojies --(view #channelID s) (view #id s)) emojies 
+                          --mapM_ invoke requests
+                          void . DiP.alert @T.Text $ "Now trying simple react"
+                          void $ invoke $ HTTPC.CreateReaction (view #channel ctx) (view #message ctx) $ UnicodeEmoji ":zero:"
                           let tempSnowflake = Snowflake 1097858537608196138 :: Snowflake Message 
                           let msgSnowflake = view #id s
                           let channelSnowflake = view #channelID s :: Snowflake Channel
                           -- reactions <- getMessage channelSnowflake msgSnowflake
                           -- let reactions = view #reactions s
                           liftIO $ delay (sleep * 1_000_000)
+                          void $ invoke $ HTTPC.DeleteAllReactions (view #channel ctx) s
                           reactions <- getReactions s :: (BotC r) => P.Sem r [Reaction]
                           --reactions <- getMessage (fromMaybe tempSnowflake $ Cont.messageID s)
                           void $ tell @T.Text ctx $ T.pack $ "Reactions " <> show (length reactions) <> " "
