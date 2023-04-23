@@ -216,6 +216,24 @@ combineTextEmoji [] _ = ""
 combineTextEmoji (t:text) (e:emojis) = t <> T.pack " " <> showt e <> T.pack "\n" <> combineTextEmoji text emojis
 
 
+tally :: [RawEmoji] -> [T.Text] -> [Reaction] -> [(Integer, RawEmoji, T.Text)]
+tally emojies categories reactions = [(view #count react, emoji', category) | (emoji', category) <- contestants, react <- reactions, view #emoji react == emoji'] 
+                                      where
+                                        contestants = zip emojies categories
+
+handlePollResults :: [RawEmoji] -> [T.Text] -> [Reaction] -> T.Text
+handlePollResults emojies categories reactions = 
+      let sortedTally = sortOn (\(x, y, z) -> x*(-1)) $ tally emojies categories reactions
+      in let mx = (\(x, _, _) -> x) $ head sortedTally
+      in let winners = takeWhile (\(x, _, _) -> x == mx) sortedTally
+      in case length winners of
+              1 -> "Congratulations to `" <> (categoryGetter . head) winners <> "` for winning this poll with " <> (showt . votesGetter . head) winners <> " votes!"
+              n -> "Congratulations to " <> T.unwords (map ((\x -> "`" <> x <> "`,") . categoryGetter) winners) <> " for a " <> showt n <> " way tie, with " <> (showt . votesGetter . head) winners <> " votes!"
+              where 
+                categoryGetter (_, _, x) = x
+                votesGetter    (x, _, _ ) = x
+
+
 main :: IO ()
 main = do
   token <- T.pack <$> getEnv "BOT_TOKEN"
@@ -342,16 +360,7 @@ main = do
                           void . tell @T.Text ctx . T.pack $ show reactions
                           -- Tally votes
                           -- TODO move to function
-                          let contestants = zip emojies categories
-                          let tally = [(view #count react, emoji', category) | (emoji', category) <- contestants, react <- reactions, view #emoji react == emoji'] :: [(Integer, RawEmoji, T.Text)]
-                          let sortedTally = reverse $ sortOn (\(x, y, z) -> x) tally
-                          let winners = takeWhile (\(x, _, _) -> x == ((\(y,_,_) -> y) . head) sortedTally) sortedTally 
-                          case length winners of
-                                1 -> void . tell @T.Text ctx $ "Congratulations to `" <> (categoryGetter . head) winners <> "` for winning this poll with " <> (showt . votesGetter . head) winners <> " votes!"
-                                n -> void . tell @T.Text ctx $ "Congratulations to " <> T.unwords (map ((\x -> "`" <> x <> "`,") . categoryGetter) winners) <> " for a " <> showt n <> " way tie, with " <> (showt . votesGetter . head) winners <> " votes!"
-                                where 
-                                  categoryGetter (_,_,x) = x
-                                  votesGetter    (x,_,_) = x
+                          void . tell @T.Text ctx $ handlePollResults emojies categories reactions
                           
                 
             --when Right sentMessage do
