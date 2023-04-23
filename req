@@ -1,8 +1,8 @@
-#!/usr/bin/env cabal
+#!/bin/env/cabal
 {- cabal:
   build-depends:
      base >= 4.13 && < 5
-     , calamity >= 0.3.0.0
+     , calamity >= 0.7.1.0
      , optics >= 0.4.1 && < 0.5
      , lens >= 5.1 && < 6
      , di-polysemy ^>= 0.2
