@@ -217,7 +217,7 @@ combineTextEmoji (t:text) (e:emojis) = t <> T.pack " " <> showt e <> T.pack "\n"
 
 
 tally :: [RawEmoji] -> [T.Text] -> [Reaction] -> [(Integer, RawEmoji, T.Text)]
-tally emojies categories reactions = [(view #count react, emoji', category) | (emoji', category) <- contestants, react <- reactions, view #emoji react == emoji'] 
+tally emojies categories reactions = [(view #count react, emoji', category) | (emoji', category) <- contestants, react <- reactions, view #emoji react == emoji', view #me react] 
                                       where
                                         contestants = zip emojies categories
 
