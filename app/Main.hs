@@ -15,6 +15,8 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Main (main) where
 
@@ -49,9 +51,11 @@ import Data.Monoid (Endo)
 import Data.Function
 import qualified Data.Text.Lazy as DT
 import Calamity.Cache.Eff (updateMessage, getMessage)
-import Control.Monad.State (evalState, MonadIO (liftIO))
+import Control.Monad.State (evalState, MonadIO (liftIO), MonadState)
 import Control.Concurrent.Thread.Delay (delay)
 import Data.List (sort, sortOn)
+import qualified Data.Default as D (def, Default)
+import Polysemy.Error (Error)
 -- import Control.Lens
 
 data CustomViewState = CustomViewState
@@ -70,18 +74,6 @@ $(makeFieldLabelsNoPrefix ''PollViewState)
 
 -- Constants
 defaultRawEmoji :: [RawEmoji]
--- defaultRawEmoji = [(UnicodeEmoji . T.pack) (":" ++ show x ++ ":") | x <- [0..9]]
---defaultRawEmoji = map (UnicodeEmoji . T.pack) 
---    [ ":zero:"
---    , ":one:"
---    , ":two:"
---    , ":three:"
---    , ":four:"
---    , ":five:"
---    , ":six:"
---    , ":seven:"
---    , ":eight:"
---    , ":nine:"] 
 defaultRawEmoji = map (UnicodeEmoji . T.pack) 
     [ "0️⃣"
     , "1️⃣"
@@ -184,20 +176,6 @@ countVotes [] yss = yss
 countVotes (x:xs) yss@(y:ys)
   | x `elem` map fst yss = countVotes xs ([(l, lx + 1) | (l, lx) <- yss, l == x] ++ [(l, lx) | (l, lx) <- yss, l /= x])
   | otherwise = countVotes xs ((x,1):yss)
---sendMsgTester :: (BotC r, ToMessage msg, Tellable t) => t -> msg -> P.Sem r (Either RestError Message)
---sendMsgTester context msg = do
---  let msg_ = (tell context msg :: (BotC r) => P.Sem r (Either RestError Message))
---  let msg = P.run msg_
---  --msg <- P.get
---  if errorNotMessage $ msg then
---    return msg
---  else
---    return msg
-----  new <- P.get :: Either RestError Message
-----  if errorNotMessage new then
-----    return new
-----  else
-----    return new
 
 eitherToMessage :: Either RestError Message -> Maybe Message
 eitherToMessage (Left x) = Nothing
@@ -233,19 +211,178 @@ handlePollResults emojies categories reactions =
                 categoryGetter (_, _, x) = x
                 votesGetter    (x, _, _ ) = x
 
+--data Change = Move | Stay 
+data Status = Muted | Unmuted 
+
+instance D.Default Status where
+  def = Unmuted
+
+changeMute :: P.Members '[P.State Status, Error Status] r => P.Sem r ()
+changeMute = do
+  s <- P.get
+  case s of
+    Muted -> P.put Unmuted
+    Unmuted -> P.put Muted
+
+getMute :: P.Members '[P.State Status, Error Status] r => P.Sem r Status
+getMute = do P.get
+
+data SState s m a where
+  SGet :: SState s m a
+  SPut :: s -> SState s m ()
+
+P.makeSem ''SState
+
+sstateTransform :: (P.Members '[P.State s] r) => P.Sem (SState s ': r) a -> P.Sem r a
+sstateTransform = P.interpret \case
+  --SGet          -> P.get
+  SPut newState -> P.put newState
+
+
+data MuteState m a where
+  MGet :: MuteState m a
+  MPut :: a -> MuteState m ()
+
+P.makeSem ''MuteState
+
+
+
+transformMute :: (P.Members '[P.State Status] r) => P.Sem (MuteState ': r) a -> P.Sem r a
+transformMute = P.interpret \case
+  MGet -> undefined
+  MPut newState -> undefined --P.raise $ P.put newState
+
+transposeMute :: (P.Member (P.State Status) r) => P.Sem (MuteState ': r) a -> P.Sem r a
+transposeMute = P.interpret \case
+  MGet -> undefined
+  MPut newState -> undefined -- P.put newState --undefined
+
+--stateToBotc :: P.Member BotC r => P.Sem (SState ': r) a -> P.Sem r a
+--stateToBotc = undefined
+
+--data Silence m a where
+--  ChangeStatus :: Change -> Silence m ()
+--  GetStatus :: Silence m Status
+--  NextStatus :: Silence m Status
+--
+--data SilenceState s m a where
+--  SetState :: s -> SilenceState s m ()
+--  CurState :: SilenceState s m a 
+--
+--
+--P.makeSem ''SilenceState
+--
+--
+--silenceInterpret :: (P.Member (P.State s) r, P.Member (P.Embed IO) r) => P.Sem (SilenceState s ': r) a -> P.Sem r a
+--silenceInterpret = P.interpret \case
+--  SetState s -> P.put s 
+--
+--silenceInterpret2 :: (P.Member (P.State s) r, P.Member (P.Embed IO) r) => P.Sem (SilenceState s ': r) a -> P.Sem r a
+--silenceInterpret2 :: (P.Member (P.Embed IO) r) => P.Sem (SilenceState s ': r) a -> P.State s r a
+--silenceInterpret2 = P.interpret \case
+  --CurState -> P.Get
+
+
+
+--moveStatus :: Change -> Status -> Status
+--moveStatus Stay x = x
+--moveStatus Move Muted = Unmuted
+--moveStatus Move Unmuted = Muted
+--
+--P.makeSem ''Silence
+--
+--silenceToBot :: P.Member (P.Embed s) r => P.Sem (Silence ': r) a -> P.Sem r a
+--silenceToBot = P.interpret \case
+--  ChangeStatus change -> undefined
+--  GetStatus           -> undefined
+--  NextStatus          -> undefined --P.mod $ moveStatus Move $ getStatus
+
+
+
+
+-- move :: Change -> Member (Silence ': r) a -> P.Sem 
+
+--changeSilence :: (P.Member Silence r) => P.Sem (Silence ': r) a -> P.Sem r a
+--changeSilence x = P.interpret case x of 
+--                    ChangeStatus change -> moveStatus change Muted
+
+
+
+--changeState :: (P.Member Silence r) => Change -> P.Sem r ()
+--changeState change = do
+  --status <- P.get
+--  let status = Unmuted
+--  let newStatus = moveStatus change status
+--  P.put (status)
+
+--changeState :: Change -> P.Sem m ()
+--changeState Stay = P.put ()
+--changeState Move = do
+--  status <- P.get
+--  let newStatus = moveStatus Move status
+--  P.put newStatus
+
+
+
+-- type Silence Status
+--data SilenceState status change = SilenceState
+--  { status :: Status
+--  , change :: Change
+--  }
+--
+--
+--P.makeSem ''SilenceState
+--instance D.Default Change where
+--  def = Stay
+--instance D.Default Status where
+--  def = Unmuted
+-- 
+--type Mute s a = P.State (s, a) Change
+--
+--changeStatus :: Change -> Status -> Status
+--changeStatus Stay x = x
+--changeStatus Move Muted = Unmuted
+--changeStatus Move Unmuted = Muted
+--
+--changeStatus' :: P.Members [Change] 
+--
+--changeSilence :: (Member (P.State SilenceState) r) => P.Sem r ()
+--changeSilence s = P.modify (\x -> x {Main.status = changeStatus s})
+
+--silence :: MonadState (s, Change) m => Mute s Change -> m ()
+--silence s = do
+  --(currentState, currentMove) <- P.Get
+  --undefined
+declareState :: P.Members '[P.State Status, Error Status] r => P.Sem r ()
+declareState = P.put def
+
+runState :: P.Member (P.State Status) r => P.Sem r a
+runState = do
+  runState
+  
+
+padCategories :: [T.Text] -> [T.Text]
+padCategories words = map T.pack $ padCategoriesHelper (map T.unpack words) 0
+
+padCategoriesHelper :: [String] -> Int -> [String]
+padCategoriesHelper [] len = []
+padCategoriesHelper words len
+  | all ((==len) . length) words = words
+  | any ((> len) . length) words = padCategoriesHelper words (foldl max 0 $ map length words)
+  | otherwise = [word ++ ['-' | _ <- [0..((+1) $ len - length word)]] | word <- words]
 
 main :: IO ()
 main = do
   token <- T.pack <$> getEnv "BOT_TOKEN"
+  
   Di.new $ \di ->
-    void . P.runFinal . P.embedToFinal . DiP.runDiToIO di
+    void . P.runFinal . P.embedToFinal . DiP.runDiToIO di 
       . runCacheInMemory
       . runMetricsNoop
       . useConstantPrefix "$"
       . useFullContext
       $ runBotIO (BotToken token) defaultIntents $ do
         addCommands $ do
-          -- just some examples
 
           command @'[] "apple" \ctx -> do
             void . tell @T.Text ctx $ "Apple"
@@ -278,35 +415,20 @@ main = do
             mapM_ (DiP.info . T.pack) newCategories
             let doThis = map (void . DiP.info . T.pack) categories
             sequence_ doThis
-            -- Create new message            
-            -- Read reactions after threadDelay
-            -- send results
-            --let cont = CreateMessageOptions {HTTPC.content = T.pack "Apple"}
-            --let x = HTTPC.CreateMessage cont 
-            --let x = "apple"
-            -- let x = reply @T.Text ctx $ T.pack "apple"
             void $ DiP.info $ show ctx
             let emptyOption = SelectOption "" "" Nothing Nothing False
             let options' = [emptyOption & #label .~ T.pack "Test1" & #default_ .~ True, emptyOption & #label .~ T.pack "Test2"] :: [SelectOption]
             let newMessage = intoMsg (DT.pack "Apple") -- <> intoMsg ((Select options' Nothing Nothing Nothing False (CustomID "Bot 13")) :: Select) 
-            -- intoMsg ((def & #description ?~ "Banan") :: Embed ) 
             void . DiP.info $ T.pack "Trying to send message"
             void . DiP.info $ T.pack $ show $ runToMessage newMessage
             void $ tell ctx $ runToMessage newMessage -- :: (BotC r, z) => PU.Member r z 
             let msg = ctxMessage ctx
             
             void $ DiP.info $ T.pack $ show msg
-            -- reactions $ ctxMessage ctx
-            --let b = HTTPC.CreateReaction (ctxChannelID ctx) (ctxMessage ctx) (UnicodeEmoji (T.pack ":one:") :: RawEmoji)
-            --void $ HTTPI.invoke b
             void $ DiP.info @T.Text "Now printing the thing:"
             void $ updateMessage (getID $ ctxMessage ctx) (\x -> x {reactions = [Reaction 1 True $ UnicodeEmoji $ T.pack ":one:"]})
             let reacts = HTTPC.GetReactions (ctxChannelID ctx) (ctxMessage ctx)
             void $ tell @T.Text ctx "text"
-            -- a <- P.get
-            -- tester <- P.gets (^. #context)
-            -- Cont.Message
-            -- pure ()
  
           command @'[] "tast" \ctx-> do 
             let emptyOption = SelectOption "" "" Nothing Nothing False
@@ -321,15 +443,10 @@ main = do
                 _ -> void $ I.respondEphemeral $ T.pack "Pie"
               void $ DiP.info $ show a
               void $ I.endView view
-              
-            
             pure ()
 
           command @'[T.Text] "view" \ctx stats-> do
             when (stats == "stats") $ void $ tell @T.Text ctx "$exp" 
-
-          command @'[T.Text] "poll2" \ctx poll -> do
-            void $ DiP.info poll
 
           command @'[Integer, T.Text] "experiment" \ctx sleep arg -> do
             let content = T.unpack $ view #content $ ctxMessage ctx
@@ -339,7 +456,7 @@ main = do
             let emojies = take (length categories) defaultRawEmoji
             -- Construct message
             -- let messageToSend = intoMsg "Poll" <> intoMsg Embed (def & #description ?~ "Embed description")
-            let embedded = (def :: Embed) & #title ?~ "Poll" & #description ?~ combineTextEmoji categories emojies
+            let embedded = (def :: Embed) & #title ?~ "Poll" & #description ?~ combineTextEmoji (padCategories categories) emojies
 
 
             sentMessage <- tell ctx $ intoMsg embedded <> intoMsg @T.Text "Polled"
@@ -363,9 +480,6 @@ main = do
                           void . tell @T.Text ctx $ handlePollResults emojies categories reactions
                           
                 
-            --when Right sentMessage do
-            --  reactions <- getMessage (#messageID ^. Right sentMessage) --(fromJust $ messageGuildID sentMessage)
-            --  void $ tell @T.Text ctx $ T.pack $ show reactions
           react @'MessageCreateEvt \(msg, _usr, _member) -> do
             when (T.isInfixOf "haskell" $ view #content msg) do
               void . invoke $ CreateReaction msg msg (UnicodeEmoji "1️⃣")
