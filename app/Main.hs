@@ -56,8 +56,8 @@ import Control.Concurrent.Thread.Delay (delay)
 import Data.List (sort, sortOn)
 import qualified Data.Default as D (def, Default)
 import Polysemy.Error (Error)
--- import Control.Lens
 
+-- Custom view states and the values they contain
 data CustomViewState = CustomViewState
   { numOptions :: Int
   , selected_ :: Maybe T.Text
@@ -73,6 +73,10 @@ $(makeFieldLabelsNoPrefix ''CustomViewState)
 $(makeFieldLabelsNoPrefix ''PollViewState)
 
 -- Constants
+annoying :: Bool
+annoying = True
+
+-- Emojies used for polls
 defaultRawEmoji :: [RawEmoji]
 defaultRawEmoji = map (UnicodeEmoji . T.pack) 
     [ "0️⃣"
@@ -87,23 +91,30 @@ defaultRawEmoji = map (UnicodeEmoji . T.pack)
     , "9️⃣"
     ]
 
+-- Simply finds all possible pairs in the range 1..x
+-- On nothing, return impossible permutation
 perm :: Maybe Int -> [(Int, Int)]
 perm Nothing = [(-1,-1)]
 perm (Just x) = [(g, h) | g <- [1..x], h <- [1..x]]
 
+-- Reads the string as a number.
+-- Gives nothing if no number is found.
 permHelp :: String -> Maybe Int
 permHelp x
   | null f = Nothing
   | otherwise = Just (read f)
     where f = takeWhile isDigit x
 
+-- Returns all primes from 1 to limit that are not prime
 antiPrimes :: Int -> [Int]
 antiPrimes limit = [x | x <- [3..limit], not (checkPrime x)]
 
-
+-- Checks if number is prime
 checkPrime :: Int -> Bool
 checkPrime x = x >= 1 && null [1 | y <- [2..x `div` 2 + 1], x `mod` y == 0]
 
+-- Splits message after limit characters at the latest.
+-- If the remainder is longer than limit, splits that as well.
 splitMessage :: Int -> String -> [String]
 splitMessage _ [] = []  
 splitMessage limit orig 
@@ -119,6 +130,7 @@ splitAtAfter mx char str = case snd x of
                 st -> [(reverse . dropWhile (/=char) . reverse . fst) x] <> splitAtAfter mx char ((reverse . takeWhile (/=char) . reverse . fst) x <> snd x)
               where x = splitAt mx str 
 
+-- Splits string at all occurrances of any of the characters in c
 splitAtAll :: String -> String -> [String]
 splitAtAll _ [] = []
 splitAtAll [] (s:st) = [s] : splitAtAll [] st 
@@ -128,59 +140,15 @@ splitAtAll c str@(s:st) =
     s' -> s'' : splitAtAll c rem
       where (s'', rem) = break (`elem` c) s'
 
-data Calc a
-  = Num a
-  | Plu (Calc a) (Calc a) 
-  | Min (Calc a) (Calc a) 
-  | Div (Calc a) (Calc a) 
-  | Mul (Calc a) (Calc a) 
-  | Void
-  deriving (Show, Eq)
 
-tokenize :: (Num a) => String -> String -> String -> Calc a
-tokenize fstArg token sndArg
-  | token == "+" = undefined
-  | token == "-" = undefined
-  | token == "/" = undefined
-  | token == "*" = undefined
-  | otherwise = undefined 
-
-parseString :: (Num a) => (Calc a, String) -> (Calc a, String)
-parseString (a, []) = (a, [])
-parseString (calc, str@(s:st))
-  | s == '+' = undefined
-
-parseStringCalculator ::(Num a) => [String] -> Calc a
-parseStringCalculator = undefined
---parseStringCalculator (stf : "(" : ste) = parseStringCalculator ste
---parseStringCalculator (stf : ")": ste) = parseStringCalculator stf
---parseStringCalculator str@(s:st)  
---  | s == "(" = undefined -- Find corresponidng ')'
---  | s == ")" = undefined -- Found corresponding
---  | s == "+" = undefined 
---  | s == "-" = undefined
---  | s == "/" = undefined
---  | s == "*" = undefined
---  | s == " " = undefined
---  | s == "," = undefined
---  | s == "." = undefined
---  | otherwise = takeWhile isDigit str
-
-errorNotMessage :: Either RestError Message -> Bool
-errorNotMessage (Left  _) = True
-errorNotMessage (Right _) = False
-
-
+-- Count votes in the poll command that uses views.
 countVotes :: [String] -> [(String, Int)] -> [(String, Int)]
 countVotes [] yss = yss
 countVotes (x:xs) yss@(y:ys)
   | x `elem` map fst yss = countVotes xs ([(l, lx + 1) | (l, lx) <- yss, l == x] ++ [(l, lx) | (l, lx) <- yss, l /= x])
   | otherwise = countVotes xs ((x,1):yss)
 
-eitherToMessage :: Either RestError Message -> Maybe Message
-eitherToMessage (Left x) = Nothing
-eitherToMessage (Right msg) = Just msg
-    
+-- Reload the message in cache and return a list of reactions done to the message 
 getReactions :: (BotC r) => Message -> P.Sem r [Reaction]
 getReactions msg = do
   msg' <- getMessage (view #id msg)
@@ -188,17 +156,21 @@ getReactions msg = do
     Just m -> pure (view #reactions m)
     Nothing -> pure []
 
+-- Combining T.Text and RawEmoji to sendable text
 combineTextEmoji :: [T.Text] -> [RawEmoji] -> T.Text
 combineTextEmoji _ [] = ""
 combineTextEmoji [] _ = ""
 combineTextEmoji (t:text) (e:emojis) = t <> T.pack " " <> showt e <> T.pack "\n" <> combineTextEmoji text emojis
 
-
+-- Count up votes for each of the different categories
+-- Used in the poll command
 tally :: [RawEmoji] -> [T.Text] -> [Reaction] -> [(Integer, RawEmoji, T.Text)]
 tally emojies categories reactions = [(view #count react, emoji', category) | (emoji', category) <- contestants, react <- reactions, view #emoji react == emoji', view #me react] 
                                       where
                                         contestants = zip emojies categories
 
+-- "Understands" the result from tally, and generates a winning message that 
+-- can be sent to announce the winners of the poll
 handlePollResults :: [RawEmoji] -> [T.Text] -> [Reaction] -> T.Text
 handlePollResults emojies categories reactions = 
       let sortedTally = sortOn (\(x, y, z) -> x*(-1)) $ tally emojies categories reactions
@@ -211,159 +183,14 @@ handlePollResults emojies categories reactions =
                 categoryGetter (_, _, x) = x
                 votesGetter    (x, _, _ ) = x
 
---data Change = Move | Stay 
-data Status = Muted | Unmuted 
 
-instance D.Default Status where
-  def = Unmuted
-
-changeMute :: P.Members '[P.State Status, Error Status] r => P.Sem r ()
-changeMute = do
-  s <- P.get
-  case s of
-    Muted -> P.put Unmuted
-    Unmuted -> P.put Muted
-
-getMute :: P.Members '[P.State Status, Error Status] r => P.Sem r Status
-getMute = do P.get
-
-data SState s m a where
-  SGet :: SState s m a
-  SPut :: s -> SState s m ()
-
-P.makeSem ''SState
-
-sstateTransform :: (P.Members '[P.State s] r) => P.Sem (SState s ': r) a -> P.Sem r a
-sstateTransform = P.interpret \case
-  --SGet          -> P.get
-  SPut newState -> P.put newState
-
-
-data MuteState m a where
-  MGet :: MuteState m a
-  MPut :: a -> MuteState m ()
-
-P.makeSem ''MuteState
-
-
-
-transformMute :: (P.Members '[P.State Status] r) => P.Sem (MuteState ': r) a -> P.Sem r a
-transformMute = P.interpret \case
-  MGet -> undefined
-  MPut newState -> undefined --P.raise $ P.put newState
-
-transposeMute :: (P.Member (P.State Status) r) => P.Sem (MuteState ': r) a -> P.Sem r a
-transposeMute = P.interpret \case
-  MGet -> undefined
-  MPut newState -> undefined -- P.put newState --undefined
-
---stateToBotc :: P.Member BotC r => P.Sem (SState ': r) a -> P.Sem r a
---stateToBotc = undefined
-
---data Silence m a where
---  ChangeStatus :: Change -> Silence m ()
---  GetStatus :: Silence m Status
---  NextStatus :: Silence m Status
---
---data SilenceState s m a where
---  SetState :: s -> SilenceState s m ()
---  CurState :: SilenceState s m a 
---
---
---P.makeSem ''SilenceState
---
---
---silenceInterpret :: (P.Member (P.State s) r, P.Member (P.Embed IO) r) => P.Sem (SilenceState s ': r) a -> P.Sem r a
---silenceInterpret = P.interpret \case
---  SetState s -> P.put s 
---
---silenceInterpret2 :: (P.Member (P.State s) r, P.Member (P.Embed IO) r) => P.Sem (SilenceState s ': r) a -> P.Sem r a
---silenceInterpret2 :: (P.Member (P.Embed IO) r) => P.Sem (SilenceState s ': r) a -> P.State s r a
---silenceInterpret2 = P.interpret \case
-  --CurState -> P.Get
-
-
-
---moveStatus :: Change -> Status -> Status
---moveStatus Stay x = x
---moveStatus Move Muted = Unmuted
---moveStatus Move Unmuted = Muted
---
---P.makeSem ''Silence
---
---silenceToBot :: P.Member (P.Embed s) r => P.Sem (Silence ': r) a -> P.Sem r a
---silenceToBot = P.interpret \case
---  ChangeStatus change -> undefined
---  GetStatus           -> undefined
---  NextStatus          -> undefined --P.mod $ moveStatus Move $ getStatus
-
-
-
-
--- move :: Change -> Member (Silence ': r) a -> P.Sem 
-
---changeSilence :: (P.Member Silence r) => P.Sem (Silence ': r) a -> P.Sem r a
---changeSilence x = P.interpret case x of 
---                    ChangeStatus change -> moveStatus change Muted
-
-
-
---changeState :: (P.Member Silence r) => Change -> P.Sem r ()
---changeState change = do
-  --status <- P.get
---  let status = Unmuted
---  let newStatus = moveStatus change status
---  P.put (status)
-
---changeState :: Change -> P.Sem m ()
---changeState Stay = P.put ()
---changeState Move = do
---  status <- P.get
---  let newStatus = moveStatus Move status
---  P.put newStatus
-
-
-
--- type Silence Status
---data SilenceState status change = SilenceState
---  { status :: Status
---  , change :: Change
---  }
---
---
---P.makeSem ''SilenceState
---instance D.Default Change where
---  def = Stay
---instance D.Default Status where
---  def = Unmuted
--- 
---type Mute s a = P.State (s, a) Change
---
---changeStatus :: Change -> Status -> Status
---changeStatus Stay x = x
---changeStatus Move Muted = Unmuted
---changeStatus Move Unmuted = Muted
---
---changeStatus' :: P.Members [Change] 
---
---changeSilence :: (Member (P.State SilenceState) r) => P.Sem r ()
---changeSilence s = P.modify (\x -> x {Main.status = changeStatus s})
-
---silence :: MonadState (s, Change) m => Mute s Change -> m ()
---silence s = do
-  --(currentState, currentMove) <- P.Get
-  --undefined
-declareState :: P.Members '[P.State Status, Error Status] r => P.Sem r ()
-declareState = P.put def
-
-runState :: P.Member (P.State Status) r => P.Sem r a
-runState = do
-  runState
-  
-
+-- Pad categories to be of equal length (if only Discord used a monospaced font)
 padCategories :: [T.Text] -> [T.Text]
 padCategories words = map T.pack $ padCategoriesHelper (map T.unpack words) 0
 
+-- The actual brain of padCategories.
+-- Ensures that the strings are of equal length.
+-- The '-' symbok is used because Discord embeds remove excessive whitespace
 padCategoriesHelper :: [String] -> Int -> [String]
 padCategoriesHelper [] len = []
 padCategoriesHelper words len
@@ -373,38 +200,47 @@ padCategoriesHelper words len
 
 main :: IO ()
 main = do
+  -- Retrieves the authentication token from the environment variable "BOT_TOKEN"
+  -- If running it yourself and have a variable with a different name, simply replace the below with said name
   token <- T.pack <$> getEnv "BOT_TOKEN"
   
-  Di.new $ \di ->
+
+  -- The main loop
+  Di.new $ \di -> -- Enables logging
     void . P.runFinal . P.embedToFinal . DiP.runDiToIO di 
-      . runCacheInMemory
+      . runCacheInMemory   
       . runMetricsNoop
-      . useConstantPrefix "$"
-      . useFullContext
+      . useConstantPrefix "$" -- Prefix to be used before commands
+      . useFullContext        -- How much info for each event is available to the bot. 
       $ runBotIO (BotToken token) defaultIntents $ do
-        addCommands $ do
+        addCommands $ do      -- Allows adding commands
 
           command @'[] "apple" \ctx -> do
             void . tell @T.Text ctx $ "Apple"
           
+          -- Returns all permutations of pairs from 1..x
           command @'[T.Text] "perm" \ctx ans -> do
             let stringed = show $ perm $ permHelp $ T.unpack ans
-            let splitted = splitAtAfter 2000 ')' stringed
+            -- Splits the string so that each message fits within 
+            -- the 2000 character limit of Discord
+            let splitted = splitAtAfter 2_000 ')' stringed
+            -- After all the messages are created, send them all
             mapM_ (tell @T.Text ctx . T.pack) splitted 
 
+          -- All numbers up to ans that is not prime are returned
           command @'[T.Text] "antiprime" \ctx ans -> do
             let x = takeWhile isDigit (T.unpack ans)
-            let c = splitAtAfter 2000 ',' $ show $ antiPrimes $ fromMaybe 1 (if null x then Nothing else Just (read x))
+            -- Ensures all messages fit within 2000 character limit
+            -- and ensures no numbers are broken up over multiple messages
+            let c = splitAtAfter 2_000 ',' $ show $ antiPrimes $ fromMaybe 1 (if null x then Nothing else Just (read x))
             let m = map (void . reply @T.Text ctx . T.pack) c 
             sequence_ m
           
-          command @'[T.Text] "calculate" \ctx ans -> do
-            undefined
-
-          command @'[T.Text] "poll" \ctx poll -> do
+          -- A command that is used solely for testing and understanding the library
+          -- Can be largely ignored
+          command @'[T.Text] "poll-testing" \ctx poll -> do
             -- This works, as 'poll' can only contain a singular text-value?
             let categories = splitAtAll "-_." $ T.unpack poll
-
             void $ DiP.info $ T.pack "apple"
             void $ DiP.info poll
             void $ DiP.info $ T.pack "Now showing categories:"
@@ -415,29 +251,34 @@ main = do
             mapM_ (DiP.info . T.pack) newCategories
             let doThis = map (void . DiP.info . T.pack) categories
             sequence_ doThis
+            -- What is included in the ctx, or fullContext, in this case?
             void $ DiP.info $ show ctx
+            -- Testing different way to create a message
             let emptyOption = SelectOption "" "" Nothing Nothing False
             let options' = [emptyOption & #label .~ T.pack "Test1" & #default_ .~ True, emptyOption & #label .~ T.pack "Test2"] :: [SelectOption]
             let newMessage = intoMsg (DT.pack "Apple") -- <> intoMsg ((Select options' Nothing Nothing Nothing False (CustomID "Bot 13")) :: Select) 
             void . DiP.info $ T.pack "Trying to send message"
             void . DiP.info $ T.pack $ show $ runToMessage newMessage
-            void $ tell ctx $ runToMessage newMessage -- :: (BotC r, z) => PU.Member r z 
+            void $ tell ctx $ runToMessage newMessage 
             let msg = ctxMessage ctx
             
             void $ DiP.info $ T.pack $ show msg
             void $ DiP.info @T.Text "Now printing the thing:"
+            -- How I originally believed emojies worked
             void $ updateMessage (getID $ ctxMessage ctx) (\x -> x {reactions = [Reaction 1 True $ UnicodeEmoji $ T.pack ":one:"]})
             let reacts = HTTPC.GetReactions (ctxChannelID ctx) (ctxMessage ctx)
             void $ tell @T.Text ctx "text"
  
-          command @'[] "tast" \ctx-> do 
+          -- A simple view that allows selecting between 3 options.
+          -- Does not provide functionality beyond that
+          command @'[] "test-view" \ctx-> do 
             let emptyOption = SelectOption "" "" Nothing Nothing False
             let options' = [emptyOption & #label .~ T.pack "Test1" & #default_ .~ True, emptyOption & #label .~ T.pack "Test2"] :: [SelectOption]
             let view = I.row do
                   a <- I.select $ map T.pack ["Apple", "Jeans", "Boots"] 
                   pure a
               
-            I.runView view (tell ctx) $ \(a) -> do
+            I.runView view (tell ctx) $ \a -> do
               case a of
                 Just "Apple" -> void $ I.respond $ T.pack "No" 
                 _ -> void $ I.respondEphemeral $ T.pack "Pie"
@@ -445,57 +286,70 @@ main = do
               void $ I.endView view
             pure ()
 
+          -- Only used on a server with several other bots running
           command @'[T.Text] "view" \ctx stats-> do
             when (stats == "stats") $ void $ tell @T.Text ctx "$exp" 
 
-          command @'[Integer, T.Text] "experiment" \ctx sleep arg -> do
+          -- The poll function. Integer is time to sleep, T.Text is a list of
+          -- space-separated values that are to be voted over. 
+          -- Currently supports up to 10 elements in said list
+          command @'[Integer, T.Text] "poll" \ctx sleep arg -> do
+            -- Gets the entire message as it was written
             let content = T.unpack $ view #content $ ctxMessage ctx
+            -- When splitting at spaces, the 2 first elements are the command itself, and the sleep amount
+            -- The remainder will be the categories to be voted over
             let categories = map T.pack $ drop 2 $ splitAtAll " " content
-            -- Guild type has the following field that can be used later:
-            -- emojis :: SnowflakeMap Emoji
             let emojies = take (length categories) defaultRawEmoji
             -- Construct message
-            -- let messageToSend = intoMsg "Poll" <> intoMsg Embed (def & #description ?~ "Embed description")
+            -- Create an embedded message that contains the alternatives of the poll
             let embedded = (def :: Embed) & #title ?~ "Poll" & #description ?~ combineTextEmoji (padCategories categories) emojies
 
-
+            -- Send the poll and get a reference to it
             sentMessage <- tell ctx $ intoMsg embedded <> intoMsg @T.Text "Polled"
-            -- sentMessage <- tell @T.Text ctx $ T.pack $ show categories ++ "\nEnds after " ++ show sleep ++ " seconds"
-            case sentMessage of 
-              Right s -> do
-                          -- void $ I.edit (void s) $ updateMessage (view #id s) (\x -> x {reactions = map (Reaction 1 True) emojies})
-                          void . DiP.info . T.pack $ "Trying to rect to messageID " ++ show (view #id s) ++ " in channelID " ++ show (view #channelID s)
-                          let requests = map (HTTPC.CreateReaction s s) emojies --(view #channelID s) (view #id s)) emojies 
-                          mapM_ invoke requests -- React to own message to create "vote" buttons
-                          void . DiP.alert @T.Text $ "Now trying simple react"
-                          void $ invoke $ HTTPC.CreateReaction (view #channel ctx) (view #message ctx) $ UnicodeEmoji ":zero:"
 
+            case sentMessage of 
+              -- Only when the message is sent
+              Right s -> do
+                          void . DiP.info . T.pack $ "Trying to rect to messageID " ++ show (view #id s) ++ " in channelID " ++ show (view #channelID s)
+                          -- React to the sent message with the poll alternatives
+                          let requests = map (HTTPC.CreateReaction s s) emojies 
+                          mapM_ invoke requests -- React to own message to create "vote" buttons
+
+                          -- Once message has been reacted to, wait for poll to finish
                           liftIO $ delay (sleep * 1_000_000)
                           reactions <- getReactions s :: (BotC r) => P.Sem r [Reaction]
-                          --reactions <- getMessage (fromMaybe tempSnowflake $ Cont.messageID s)
-                          void $ tell @T.Text ctx $ T.pack $ "Reactions " <> show (length reactions) <> " "
-                          void . tell @T.Text ctx . T.pack $ show reactions
                           -- Tally votes
-                          -- TODO move to function
                           void . tell @T.Text ctx $ handlePollResults emojies categories reactions
                           
-                
+          -- If message contains "haskell", react to said message 
           react @'MessageCreateEvt \(msg, _usr, _member) -> do
             when (T.isInfixOf "haskell" $ view #content msg) do
               void . invoke $ CreateReaction msg msg (UnicodeEmoji "1️⃣")
           
+          -- Annoying function.
+          -- When someone starts typing, ask if they are gonna finish their message.
+          -- The constant "annoying" can be disabled if testing your own bot
           react @'TypingStartEvt \(channelFlake, userFlake, _) -> do
-            void . tell @T.Text channelFlake $ T.pack . ("Are you gonna finish that "++) . (++" ?") $ T.unpack . mention $ userFlake
+            when annoying $
+              void . tell @T.Text channelFlake $ T.pack . ("Are you gonna finish that "++) . (++" ?") $ T.unpack . mention $ userFlake
           
-          command @'[] "poll3" \ctx -> do
+          -- A different poll function using a drop-down instead.
+          -- Greatly increases the amount of items that can be polled, and does so effortlessly.
+          -- However, everyone can vote for the same thing several times
+          command @'[] "poll2" \ctx -> do
+            -- Get original message
             let messageContent = T.unpack $ ctxMessage ctx ^. #content
+            -- The things to be polled are the last elements, as the first
+            -- will always be the command
             let components = tail $ words messageContent 
+            -- The time feature does not currently work
             let time = takeWhile isDigit $ head components 
             if null time then do 
                 void $ tell @T.Text ctx  "Format: <time> <category1> <category2> ..."  
             else do 
               let timeInt = read time :: Int
-              let categories = map (T.pack) $ tail components
+              let categories = map T.pack $ tail components
+              -- Create buttons to add to counter and finish poll respectively
               let view options = do
                       ~(vote, done) <- I.row do
                         vote <- I.button ButtonPrimary "Vote"
@@ -503,34 +357,40 @@ main = do
                         pure (vote, done)
                       s <- I.select options
                       pure (vote, done, s)
+              -- Using custom poll-view-state that contains the desired information
               let initialState = PollViewState categories (Just (head categories)) []
               s <- P.evalState initialState $ 
                 I.runView (view categories) (tell ctx) \(vote, done, s) -> do
+                  -- When someone calls vote on something
                   when vote do
+                      -- Get what they currently have selected
                       sel <- P.gets (^. #selected)
                       votes <- P.gets (^. #voted)
+                      -- Modify vodets to reflect this
                       P.modify' (#voted .~ (votes ++ [fromMaybe (head categories) sel]))
+                      -- Update view
                       I.replaceView (view categories) (void . I.edit)
+                  -- When someone selects done
                   when done do
                       finalSelected <- P.gets (^. #selected)
                       votes <- P.gets (^. #voted)
+                      -- View has to end on something
                       I.endView finalSelected
                       I.deleteInitialMsg
                       -- Logic to view votes and result nicely here
                       let countedVotes = countVotes (map T.unpack votes) []
-                      void . I.respond $ show countedVotes -- TODO fix this
+                      void . I.respond $ show countedVotes 
+                      -- Send which votes were cast as a list
                       void . tell @T.Text ctx $ T.pack $ show votes 
-                      pure ()
 
+                  -- Handle selection
                   case s of
-                    --s' -> do
-                    --  void I.deferComponent
-                    
+                    -- New element selected
                     Just s' -> do
                       P.modify' (#selected ?~ s')
                       void I.deferComponent
+                    -- Nothign selected
                     Nothing -> pure ()
               P.embed $ print s
               pure ()
-
 
